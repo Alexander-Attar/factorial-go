@@ -3,71 +3,67 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"math/big"
 	"net/http"
 	"net/url"
-	"os"
-	"os/signal"
-	"syscall"
+	"strconv"
 )
 
-func gen(nums ...int) <-chan int {
-	out := make(chan int)
-	go func() {
-		for _, n := range nums {
-			out <- n
-		}
-		close(out)
-	}()
-	return out
+type HttpResponse struct {
+	url      string
+	response *http.Response
+	err      error
 }
 
-func sq(in <-chan int) <-chan int {
-	out := make(chan int)
-	go func() {
-		for n := range in {
-			out <- n * n
-		}
-		close(out)
-	}()
-	return out
+func concurrentRequests(urls []string, ch chan *HttpResponse) {
+	for _, url := range urls {
+		go func(url string) {
+			resp, err := http.Get(url)
+			if err != nil && resp != nil && resp.StatusCode == http.StatusOK {
+				resp.Body.Close()
+			}
+			ch <- &HttpResponse{url, resp, err}
+		}(url)
+	}
+
+	return
 }
 
 func main() {
-
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	var c = make(chan *big.Int)
-	go series(c)
-
-	active := true
-	go func() {
-		<-sigs
-		signal.Stop(sigs)
-		active = false
-	}()
-
-	for active {
-		var URL *url.URL
-		URL, err := url.Parse("http://localhost:12345/")
-		if err != nil {
-			panic(err)
-		}
-
-		n := <-c
-		parameters := url.Values{}
-		parameters.Add("n", n.String())
-		URL.RawQuery = parameters.Encode()
-
-		resp, err := http.Get(URL.String())
-		if err != nil {
-			panic(err)
-		}
-
-		defer resp.Body.Close()
-		body, err := ioutil.ReadAll(resp.Body)
-		fmt.Printf("N: %v, A: %v\n", n.String(), string(body))
+	count := 0
+	var URL *url.URL
+	URL, err := url.Parse("http://localhost:12345/")
+	if err != nil {
+		panic(err)
 	}
 
-	fmt.Println("See you later")
+	ch := make(chan *HttpResponse)
+	urls := make([]string, 10)
+
+	// compose urls for the first 10 factorial numbers
+	for n := range urls {
+		parameters := url.Values{}
+		parameters.Add("n", strconv.Itoa(n))
+		URL.RawQuery = parameters.Encode()
+		urls[n] = URL.String()
+	}
+
+	concurrentRequests(urls, ch)
+
+	for count < 10 {
+		r, ok := <-ch
+		if !ok {
+			break
+		}
+
+		if r.err != nil {
+			panic(r.err)
+		}
+		body, err := ioutil.ReadAll(r.response.Body)
+		if err != nil {
+			panic(err)
+		}
+		var n = r.url[len(r.url)-1:] // pop the number n off the url
+		fmt.Printf("N: %v, A: %v\n", n, string(body))
+		count++
+	}
 }
