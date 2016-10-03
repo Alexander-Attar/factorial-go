@@ -66,4 +66,6 @@ func main() {
 		fmt.Printf("N: %v, A: %v\n", n, string(body))
 		count++
 	}
+
+	close(ch)
 }
